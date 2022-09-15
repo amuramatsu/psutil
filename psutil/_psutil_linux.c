@@ -441,6 +441,9 @@ psutil_net_if_duplex_speed(PyObject* self, PyObject* args) {
         duplex = ethcmd.duplex;
         // speed is returned from ethtool as a __u32 ranging from 0 to INT_MAX
         // or SPEED_UNKNOWN (-1)
+#if defined(ANDROID) || defined(__ANDROID__)
+	speed = 0;
+#else
         uint_speed = ethtool_cmd_speed(&ethcmd);
         if (uint_speed == (__u32)SPEED_UNKNOWN || uint_speed > INT_MAX) {
             speed = 0;
@@ -448,6 +451,7 @@ psutil_net_if_duplex_speed(PyObject* self, PyObject* args) {
         else {
             speed = (int)uint_speed;
         }
+#endif
     }
     else {
         if ((errno == EOPNOTSUPP) || (errno == EINVAL)) {
