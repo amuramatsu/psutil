@@ -24,6 +24,7 @@ from psutil import OPENBSD
 from psutil import POSIX
 from psutil import SUNOS
 from psutil.tests import CI_TESTING
+from psutil.tests import TERMUX
 from psutil.tests import HAS_NET_IO_COUNTERS
 from psutil.tests import PYTHON_EXE
 from psutil.tests import PsutilTestCase
@@ -243,7 +244,7 @@ class TestProcess(PsutilTestCase):
                 p = psutil.Process()
                 self.assertRaises(psutil.NoSuchProcess, p.name)
 
-    @unittest.skipIf(MACOS or BSD, 'ps -o start not available')
+    @unittest.skipIf(MACOS or BSD or TERMUX, 'ps -o start not available')
     def test_create_time(self):
         time_ps = ps('start', self.pid)
         time_psutil = psutil.Process(self.pid).create_time()
@@ -326,7 +327,7 @@ class TestSystemAPIs(PsutilTestCase):
                     "couldn't find %s nic in 'ifconfig -a' output\n%s" % (
                         nic, output))
 
-    @unittest.skipIf(CI_TESTING and not psutil.users(), "unreliable on CI")
+    @unittest.skipIf((CI_TESTING or TERMUX) and not psutil.users(), "unreliable on CI / termux")
     @retry_on_failure()
     def test_users(self):
         out = sh("who")

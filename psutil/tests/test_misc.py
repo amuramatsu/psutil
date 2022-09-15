@@ -38,6 +38,7 @@ from psutil._compat import FileNotFoundError
 from psutil._compat import redirect_stderr
 from psutil.tests import APPVEYOR
 from psutil.tests import CI_TESTING
+from psutil.tests import TERMUX
 from psutil.tests import HAS_BATTERY
 from psutil.tests import HAS_MEMORY_MAPS
 from psutil.tests import HAS_NET_IO_COUNTERS
@@ -776,7 +777,7 @@ class TestScripts(PsutilTestCase):
     def test_procinfo(self):
         self.assert_stdout('procinfo.py', str(os.getpid()))
 
-    @unittest.skipIf(CI_TESTING and not psutil.users(), "no users")
+    @unittest.skipIf((CI_TESTING or TERMUX) and not psutil.users(), "no users")
     def test_who(self):
         self.assert_stdout('who.py')
 
@@ -789,6 +790,7 @@ class TestScripts(PsutilTestCase):
     def test_netstat(self):
         self.assert_stdout('netstat.py')
 
+    @unittest.skipIf(TERMUX, "not supported")
     def test_ifconfig(self):
         self.assert_stdout('ifconfig.py')
 

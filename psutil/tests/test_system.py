@@ -45,6 +45,7 @@ from psutil.tests import HAS_SENSORS_FANS
 from psutil.tests import HAS_SENSORS_TEMPERATURES
 from psutil.tests import IS_64BIT
 from psutil.tests import PYPY
+from psutil.tests import TERMUX
 from psutil.tests import UNICODE_SUFFIX
 from psutil.tests import PsutilTestCase
 from psutil.tests import check_net_address
@@ -198,7 +199,7 @@ class TestMiscAPIs(PsutilTestCase):
         self.assertGreater(bt, 0)
         self.assertLess(bt, time.time())
 
-    @unittest.skipIf(CI_TESTING and not psutil.users(), "unreliable on CI")
+    @unittest.skipIf((CI_TESTING or TERMUX) and not psutil.users(), "unreliable on CI/termux")
     def test_users(self):
         users = psutil.users()
         self.assertNotEqual(users, [])
@@ -367,6 +368,7 @@ class TestCpuAPIs(PsutilTestCase):
         #                                     msg="%s %s" % (new_t, last_t))
         #         last = new
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_cpu_times_time_increases(self):
         # Make sure time increases between calls.
         t1 = sum(psutil.cpu_times())
@@ -410,6 +412,7 @@ class TestCpuAPIs(PsutilTestCase):
         #                 new_t, last_t, msg="%s %s" % (lastcpu, newcpu))
         #     last = new
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_per_cpu_times_2(self):
         # Simulate some work load then make sure time have increased
         # between calls.
@@ -529,7 +532,8 @@ class TestCpuAPIs(PsutilTestCase):
         assert ls, ls
         check_ls([psutil.cpu_freq(percpu=False)])
 
-        if LINUX:
+        #XXX
+        if LINUX and not TERMUX:
             self.assertEqual(len(ls), psutil.cpu_count())
 
     @unittest.skipIf(not HAS_GETLOADAVG, "not supported")
@@ -594,7 +598,9 @@ class TestDiskAPIs(PsutilTestCase):
 
         # all = False
         ls = psutil.disk_partitions(all=False)
-        self.assertTrue(ls, msg=ls)
+        #XXX
+        if not TERMUX:
+            self.assertTrue(ls, msg=ls)
         for disk in ls:
             check_ntuple(disk)
             if WINDOWS and 'cdrom' in disk.opts:
@@ -611,7 +617,9 @@ class TestDiskAPIs(PsutilTestCase):
 
         # all = True
         ls = psutil.disk_partitions(all=True)
-        self.assertTrue(ls, msg=ls)
+        #XXX
+        if not TERMUX:
+            self.assertTrue(ls, msg=ls)
         for disk in psutil.disk_partitions(all=True):
             check_ntuple(disk)
             if not WINDOWS and disk.mountpoint:
@@ -723,6 +731,7 @@ class TestNetAPIs(PsutilTestCase):
             self.assertEqual(psutil.net_io_counters(pernic=True), {})
             assert m.called
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_net_if_addrs(self):
         nics = psutil.net_if_addrs()
         assert nics, nics
@@ -800,6 +809,7 @@ class TestNetAPIs(PsutilTestCase):
             else:
                 self.assertEqual(addr.address, '06-3d-29-00-00-00')
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_net_if_stats(self):
         nics = psutil.net_if_stats()
         assert nics, nics

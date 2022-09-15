@@ -50,6 +50,7 @@ from psutil.tests import HAS_PROC_IO_COUNTERS
 from psutil.tests import HAS_RLIMIT
 from psutil.tests import HAS_THREADS
 from psutil.tests import PYPY
+from psutil.tests import TERMUX
 from psutil.tests import PYTHON_EXE
 from psutil.tests import PsutilTestCase
 from psutil.tests import ThreadTask
@@ -1109,6 +1110,8 @@ class TestProcess(PsutilTestCase):
         child.wait()
         self.assertEqual(parent.children(recursive=True), [])
 
+    #XXX
+    @unittest.skipIf(TERMUX, "not supported")
     def test_children_duplicates(self):
         # find the process which has the highest number of children
         table = collections.defaultdict(int)
@@ -1363,6 +1366,7 @@ class TestProcess(PsutilTestCase):
         self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.kill)
         self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.children)
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_pid_0(self):
         # Process(0) is supposed to work on all platforms except Linux
         if 0 not in psutil.pids():

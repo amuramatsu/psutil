@@ -36,6 +36,7 @@ from psutil.tests import HAS_CPU_FREQ
 from psutil.tests import HAS_GETLOADAVG
 from psutil.tests import HAS_RLIMIT
 from psutil.tests import PYPY
+from psutil.tests import TERMUX
 from psutil.tests import TOLERANCE_DISK_USAGE
 from psutil.tests import TOLERANCE_SYS_MEM
 from psutil.tests import PsutilTestCase
@@ -252,6 +253,7 @@ def mock_open_exception(for_path, exc):
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestSystemVirtualMemory(PsutilTestCase):
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_total(self):
         # free_value = free_physmem().total
         # psutil_value = psutil.virtual_memory().total
@@ -276,6 +278,7 @@ class TestSystemVirtualMemory(PsutilTestCase):
             free_value, psutil_value, delta=TOLERANCE_SYS_MEM,
             msg='%s %s \n%s' % (free_value, psutil_value, free.output))
 
+    @unittest.skipIf(TERMUX, 'not supported')
     @retry_on_failure()
     def test_free(self):
         vmstat_value = vmstat('free memory') * 1024
@@ -283,6 +286,7 @@ class TestSystemVirtualMemory(PsutilTestCase):
         self.assertAlmostEqual(
             vmstat_value, psutil_value, delta=TOLERANCE_SYS_MEM)
 
+    @unittest.skipIf(TERMUX, 'not supported')
     @retry_on_failure()
     def test_buffers(self):
         vmstat_value = vmstat('buffer memory') * 1024
@@ -290,6 +294,7 @@ class TestSystemVirtualMemory(PsutilTestCase):
         self.assertAlmostEqual(
             vmstat_value, psutil_value, delta=TOLERANCE_SYS_MEM)
 
+    @unittest.skipIf(TERMUX, 'not supported')
     @retry_on_failure()
     def test_active(self):
         vmstat_value = vmstat('active memory') * 1024
@@ -297,6 +302,7 @@ class TestSystemVirtualMemory(PsutilTestCase):
         self.assertAlmostEqual(
             vmstat_value, psutil_value, delta=TOLERANCE_SYS_MEM)
 
+    @unittest.skipIf(TERMUX, 'not supported')
     @retry_on_failure()
     def test_inactive(self):
         vmstat_value = vmstat('inactive memory') * 1024
@@ -649,15 +655,18 @@ class TestSystemCPUTimes(PsutilTestCase):
         fields = psutil.cpu_times()._fields
         kernel_ver = re.findall(r'\d+\.\d+\.\d+', os.uname()[2])[0]
         kernel_ver_info = tuple(map(int, kernel_ver.split('.')))
-        if kernel_ver_info >= (2, 6, 11):
+        #XXX
+        if kernel_ver_info >= (2, 6, 11) and not TERMUX:
             self.assertIn('steal', fields)
         else:
             self.assertNotIn('steal', fields)
-        if kernel_ver_info >= (2, 6, 24):
+        #XXX
+        if kernel_ver_info >= (2, 6, 24) and not TERMUX:
             self.assertIn('guest', fields)
         else:
             self.assertNotIn('guest', fields)
-        if kernel_ver_info >= (3, 2, 0):
+        #XXX
+        if kernel_ver_info >= (3, 2, 0) and not TERMUX:
             self.assertIn('guest_nice', fields)
         else:
             self.assertNotIn('guest_nice', fields)
@@ -700,8 +709,10 @@ class TestSystemCPUCountLogical(PsutilTestCase):
         # order to cause the parsing of /proc/cpuinfo and /proc/stat.
         with mock.patch(
                 'psutil._pslinux.os.sysconf', side_effect=ValueError) as m:
-            self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
-            assert m.called
+            #XXX
+            if not TERMUX:
+                self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
+                assert m.called
 
             # Let's have open() return empty data and make sure None is
             # returned ('cause we mimick os.cpu_count()).
@@ -718,19 +729,24 @@ class TestSystemCPUCountLogical(PsutilTestCase):
             fake_file = io.BytesIO(cpuinfo_data)
             with mock.patch('psutil._common.open',
                             return_value=fake_file, create=True) as m:
-                self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
+                #XXX
+                if not TERMUX:
+                    self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
 
             # Finally, let's make /proc/cpuinfo return meaningless data;
             # this way we'll fall back on relying on /proc/stat
-            with mock_open_content('/proc/cpuinfo', b"") as m:
-                self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
-                m.called
+            #XXX
+            if not TERMUX:
+                with mock_open_content('/proc/cpuinfo', b"") as m:
+                    self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
+                    m.called
 
 
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestSystemCPUCountCores(PsutilTestCase):
 
-    @unittest.skipIf(not which("lscpu"), "lscpu utility not available")
+    #XXX
+    @unittest.skipIf(TERMUX or not which("lscpu"), "lscpu utility not available")
     def test_against_lscpu(self):
         out = sh("lscpu -p")
         core_ids = set()
@@ -740,6 +756,8 @@ class TestSystemCPUCountCores(PsutilTestCase):
                 core_ids.add(fields[1])
         self.assertEqual(psutil.cpu_count(logical=False), len(core_ids))
 
+    #XXX
+    @unittest.skipIf(TERMUX, "not supported")
     def test_method_2(self):
         meth_1 = psutil._pslinux.cpu_count_cores()
         with mock.patch('glob.glob', return_value=[]) as m:
@@ -773,7 +791,8 @@ class TestSystemCPUFrequency(PsutilTestCase):
                         create=True):
             assert psutil.cpu_freq()
 
-    @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
+    #XXX
+    @unittest.skipIf(TERMUX or not HAS_CPU_FREQ, "not supported")
     def test_emulate_use_cpuinfo(self):
         # Emulate a case where /sys/devices/system/cpu/cpufreq* does not
         # exist and /proc/cpuinfo is used instead.
@@ -829,7 +848,7 @@ class TestSystemCPUFrequency(PsutilTestCase):
                 if freq.max != 0.0:
                     self.assertEqual(freq.max, 700.0)
 
-    @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
+    @unittest.skipIf(TERMUX or not HAS_CPU_FREQ, "not supported")
     def test_emulate_multi_cpu(self):
         def open_mock(name, *args, **kwargs):
             n = name
@@ -898,7 +917,7 @@ class TestSystemCPUFrequency(PsutilTestCase):
                     self.assertEqual(freq.current, 200)
 
 
-@unittest.skipIf(not LINUX, "LINUX only")
+@unittest.skipIf(not LINUX or TERMUX, "LINUX only")
 class TestSystemCPUStats(PsutilTestCase):
 
     def test_ctx_switches(self):
@@ -934,6 +953,7 @@ class TestLoadAvg(PsutilTestCase):
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestSystemNetIfAddrs(PsutilTestCase):
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_ips(self):
         for name, addrs in psutil.net_if_addrs().items():
             for addr in addrs:
@@ -973,7 +993,7 @@ class TestSystemNetIfAddrs(PsutilTestCase):
     #         pprint.pformat(nics), out))
 
 
-@unittest.skipIf(not LINUX, "LINUX only")
+@unittest.skipIf(not LINUX or TERMUX, "LINUX only")
 class TestSystemNetIfStats(PsutilTestCase):
 
     @unittest.skipIf(not which("ifconfig"), "ifconfig utility not available")
@@ -1102,6 +1122,7 @@ class TestSystemDiskPartitions(PsutilTestCase):
             self.assertAlmostEqual(usage.used, used,
                                    delta=TOLERANCE_DISK_USAGE)
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_zfs_fs(self):
         # Test that ZFS partitions are returned.
         with open("/proc/filesystems", "r") as f:
@@ -1138,7 +1159,7 @@ class TestSystemDiskPartitions(PsutilTestCase):
             psutil.PROCFS_PATH = "/proc"
 
 
-@unittest.skipIf(not LINUX, "LINUX only")
+@unittest.skipIf(not LINUX or TERMUX, "LINUX only")
 class TestSystemDiskIoCounters(PsutilTestCase):
 
     def test_emulate_kernel_2_4(self):
@@ -1274,7 +1295,7 @@ class TestSystemDiskIoCounters(PsutilTestCase):
             self.assertRaises(NotImplementedError, psutil.disk_io_counters)
 
 
-@unittest.skipIf(not LINUX, "LINUX only")
+@unittest.skipIf(not LINUX or TERMUX, "LINUX only")
 class TestRootFsDeviceFinder(PsutilTestCase):
 
     def setUp(self):
@@ -1295,7 +1316,7 @@ class TestRootFsDeviceFinder(PsutilTestCase):
             self.assertRaises(FileNotFoundError, finder.ask_sys_dev_block)
         finder.ask_sys_class_block()
 
-    @unittest.skipIf(GITHUB_ACTIONS, "unsupported on GITHUB_ACTIONS")
+    @unittest.skipIf(GITHUB_ACTIONS or TERMUX, "unsupported on GITHUB_ACTIONS/termux")
     def test_comparisons(self):
         finder = RootFsDeviceFinder()
         self.assertIsNotNone(finder.find())
@@ -1344,11 +1365,13 @@ class TestRootFsDeviceFinder(PsutilTestCase):
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestMisc(PsutilTestCase):
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_boot_time(self):
         vmstat_value = vmstat('boot time')
         psutil_value = psutil.boot_time()
         self.assertEqual(int(vmstat_value), int(psutil_value))
 
+    @unittest.skipIf(TERMUX, 'not supported')
     def test_no_procfs_on_import(self):
         my_procfs = self.get_testfn()
         os.mkdir(my_procfs)
@@ -1448,7 +1471,8 @@ class TestMisc(PsutilTestCase):
             self.assertNotEqual(sum(cpu_times_percent), 100.0)
             self.assertNotEqual(sum(map(sum, cpu_times_percent_percpu)), 0)
             self.assertNotEqual(sum(map(sum, cpu_times_percent_percpu)), 100.0)
-            self.assertEqual(cpu_times_percent.steal, 0)
+            if not TERMUX:
+                self.assertEqual(cpu_times_percent.steal, 0)
             self.assertNotEqual(cpu_times_percent.user, 0)
 
     def test_boot_time_mocked(self):
@@ -1483,16 +1507,18 @@ class TestMisc(PsutilTestCase):
         os.mkdir(tdir)
         try:
             psutil.PROCFS_PATH = tdir
-            self.assertRaises(IOError, psutil.virtual_memory)
-            self.assertRaises(IOError, psutil.cpu_times)
-            self.assertRaises(IOError, psutil.cpu_times, percpu=True)
-            self.assertRaises(IOError, psutil.boot_time)
-            # self.assertRaises(IOError, psutil.pids)
-            self.assertRaises(IOError, psutil.net_connections)
-            self.assertRaises(IOError, psutil.net_io_counters)
-            self.assertRaises(IOError, psutil.net_if_stats)
-            # self.assertRaises(IOError, psutil.disk_io_counters)
-            self.assertRaises(IOError, psutil.disk_partitions)
+            #XXX
+            if not TERMUX:
+                self.assertRaises(IOError, psutil.virtual_memory)
+                self.assertRaises(IOError, psutil.cpu_times)
+                self.assertRaises(IOError, psutil.cpu_times, percpu=True)
+                self.assertRaises(IOError, psutil.boot_time)
+                # self.assertRaises(IOError, psutil.pids)
+                self.assertRaises(IOError, psutil.net_connections)
+                self.assertRaises(IOError, psutil.net_io_counters)
+                self.assertRaises(IOError, psutil.net_if_stats)
+                # self.assertRaises(IOError, psutil.disk_io_counters)
+                self.assertRaises(IOError, psutil.disk_partitions)
             self.assertRaises(psutil.NoSuchProcess, psutil.Process)
         finally:
             psutil.PROCFS_PATH = "/proc"
