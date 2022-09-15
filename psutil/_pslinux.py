@@ -157,6 +157,7 @@ TCP_STATUSES = {
     "0B": _common.CONN_CLOSING
 }
 
+TERMUX = 'TERMUX_VERSION' in os.environ
 
 # =====================================================================
 # --- named tuples
@@ -265,8 +266,11 @@ def set_scputimes_ntuple(procfs_path):
     Used by cpu_times() function.
     """
     global scputimes
-    with open_binary('%s/stat' % procfs_path) as f:
-        values = f.readline().split()[1:]
+    try:
+        with open_binary('%s/stat' % procfs_path) as f:
+            values = f.readline().split()[1:]
+    except IOError:
+        values = []
     fields = ['user', 'nice', 'system', 'idle', 'iowait', 'irq', 'softirq']
     vlen = len(values)
     if vlen >= 8:
@@ -412,10 +416,15 @@ def virtual_memory():
     """
     missing_fields = []
     mems = {}
-    with open_binary('%s/meminfo' % get_procfs_path()) as f:
-        for line in f:
-            fields = line.split()
-            mems[fields[0]] = int(fields[1]) * 1024
+    try:
+        with open_binary('%s/meminfo' % get_procfs_path()) as f:
+            for line in f:
+                fields = line.split()
+                mems[fields[0]] = int(fields[1]) * 1024
+    except IOError:
+        total, free, _, _, _, _, unit_multiplier = cext.linux_sysinfo()
+        mems[b'MemTotal:'] = total * unit_multiplier
+        mems[b'MemFree:'] = free * unit_multiplier
 
     # /proc doc states that the available fields in /proc/meminfo vary
     # by architecture and compile options, but these 3 values are also
@@ -519,10 +528,13 @@ def virtual_memory():
 def swap_memory():
     """Return swap memory metrics."""
     mems = {}
-    with open_binary('%s/meminfo' % get_procfs_path()) as f:
-        for line in f:
-            fields = line.split()
-            mems[fields[0]] = int(fields[1]) * 1024
+    try:
+        with open_binary('%s/meminfo' % get_procfs_path()) as f:
+            for line in f:
+                fields = line.split()
+                mems[fields[0]] = int(fields[1]) * 1024
+    except IOError:
+        pass
     # We prefer /proc/meminfo over sysinfo() syscall so that
     # psutil.PROCFS_PATH can be used in order to allow retrieval
     # for linux containers, see:
@@ -583,8 +595,11 @@ def cpu_times():
     """
     procfs_path = get_procfs_path()
     set_scputimes_ntuple(procfs_path)
-    with open_binary('%s/stat' % procfs_path) as f:
-        values = f.readline().split()
+    try:
+        with open_binary('%s/stat' % procfs_path) as f:
+            values = f.readline().split()
+    except IOError:
+        return scputimes(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) #XXX
     fields = values[1:len(scputimes._fields) + 1]
     fields = [float(x) / CLOCK_TICKS for x in fields]
     return scputimes(*fields)
@@ -597,18 +612,20 @@ def per_cpu_times():
     procfs_path = get_procfs_path()
     set_scputimes_ntuple(procfs_path)
     cpus = []
-    with open_binary('%s/stat' % procfs_path) as f:
-        # get rid of the first line which refers to system wide CPU stats
-        f.readline()
-        for line in f:
-            if line.startswith(b'cpu'):
-                values = line.split()
-                fields = values[1:len(scputimes._fields) + 1]
-                fields = [float(x) / CLOCK_TICKS for x in fields]
-                entry = scputimes(*fields)
-                cpus.append(entry)
-        return cpus
-
+    try:
+        with open_binary('%s/stat' % procfs_path) as f:
+            # get rid of the first line which refers to system wide CPU stats
+            f.readline()
+            for line in f:
+                if line.startswith(b'cpu'):
+                    values = line.split()
+                    fields = values[1:len(scputimes._fields) + 1]
+                    fields = [float(x) / CLOCK_TICKS for x in fields]
+                    entry = scputimes(*fields)
+                    cpus.append(entry)
+            return cpus
+    except IOError:
+        return [ cpu_times() ] * cpu_count_logical()
 
 def cpu_count_logical():
     """Return the number of logical CPUs in the system."""
@@ -617,21 +634,28 @@ def cpu_count_logical():
     except ValueError:
         # as a second fallback we try to parse /proc/cpuinfo
         num = 0
-        with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
-            for line in f:
-                if line.lower().startswith(b'processor'):
-                    num += 1
+        try:
+            with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
+                for line in f:
+                    if line.lower().startswith(b'processor'):
+                        num += 1
+        except IOError:
+            pass
 
         # unknown format (e.g. amrel/sparc architectures), see:
         # https://github.com/giampaolo/psutil/issues/200
         # try to parse /proc/stat as a last resort
         if num == 0:
             search = re.compile(r'cpu\d')
-            with open_text('%s/stat' % get_procfs_path()) as f:
-                for line in f:
-                    line = line.split(' ')[0]
-                    if search.match(line):
-                        num += 1
+            try:
+                with open_text('%s/stat' % get_procfs_path()) as f:
+                    for line in f:
+                        line = line.split(' ')[0]
+                        if search.match(line):
+                            num += 1
+            except IOError:
+                # mimic os.cpu_count()
+                return None
 
         if num == 0:
             # mimic os.cpu_count()
@@ -651,8 +675,11 @@ def cpu_count_cores():
     p1 = "/sys/devices/system/cpu/cpu[0-9]*/topology/core_cpus_list"
     p2 = "/sys/devices/system/cpu/cpu[0-9]*/topology/thread_siblings_list"
     for path in glob.glob(p1) or glob.glob(p2):
-        with open_binary(path) as f:
-            ls.add(f.read().strip())
+        try:
+            with open_binary(path) as f:
+                ls.add(f.read().strip())
+        except IOError:
+            pass
     result = len(ls)
     if result != 0:
         return result
@@ -660,43 +687,51 @@ def cpu_count_cores():
     # Method #2
     mapping = {}
     current_info = {}
-    with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
-        for line in f:
-            line = line.strip().lower()
-            if not line:
-                # new section
-                try:
-                    mapping[current_info[b'physical id']] = \
-                        current_info[b'cpu cores']
-                except KeyError:
-                    pass
-                current_info = {}
-            else:
-                # ongoing section
-                if line.startswith((b'physical id', b'cpu cores')):
-                    key, value = line.split(b'\t:', 1)
-                    current_info[key] = int(value)
-
+    try:
+        with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
+            for line in f:
+                line = line.strip().lower()
+                if not line:
+                    # new section
+                    try:
+                        mapping[current_info[b'physical id']] = \
+                            current_info[b'cpu cores']
+                    except KeyError:
+                        pass
+                    current_info = {}
+                else:
+                    # ongoing section
+                    if line.startswith((b'physical id', b'cpu cores')):
+                        key, value = line.split(b'\t:', 1)
+                        current_info[key] = int(value)
+    except IOError:
+        # mimic os.cpu_count()
+        return None
     result = sum(mapping.values())
     return result or None  # mimic os.cpu_count()
 
 
 def cpu_stats():
     """Return various CPU stats as a named tuple."""
-    with open_binary('%s/stat' % get_procfs_path()) as f:
-        ctx_switches = None
-        interrupts = None
-        soft_interrupts = None
-        for line in f:
-            if line.startswith(b'ctxt'):
-                ctx_switches = int(line.split()[1])
-            elif line.startswith(b'intr'):
-                interrupts = int(line.split()[1])
-            elif line.startswith(b'softirq'):
-                soft_interrupts = int(line.split()[1])
-            if ctx_switches is not None and soft_interrupts is not None \
-                    and interrupts is not None:
-                break
+    try:
+        with open_binary('%s/stat' % get_procfs_path()) as f:
+            ctx_switches = None
+            interrupts = None
+            soft_interrupts = None
+            for line in f:
+                if line.startswith(b'ctxt'):
+                    ctx_switches = int(line.split()[1])
+                elif line.startswith(b'intr'):
+                    interrupts = int(line.split()[1])
+                elif line.startswith(b'softirq'):
+                    soft_interrupts = int(line.split()[1])
+                if ctx_switches is not None and soft_interrupts is not None \
+                        and interrupts is not None:
+                    break
+    except IOError:
+        ctx_switches = 1
+        interrupts = 1
+        soft_interrupts = 1
     syscalls = 0
     return _common.scpustats(
         ctx_switches, interrupts, soft_interrupts, syscalls)
@@ -706,10 +741,13 @@ def _cpu_get_cpuinfo_freq():
     """Return current CPU frequency from cpuinfo if available.
     """
     ret = []
-    with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
-        for line in f:
-            if line.lower().startswith(b'cpu mhz'):
-                ret.append(float(line.split(b':', 1)[1]))
+    try:
+        with open_binary('%s/cpuinfo' % get_procfs_path()) as f:
+            for line in f:
+                if line.lower().startswith(b'cpu mhz'):
+                    ret.append(float(line.split(b':', 1)[1]))
+    except IOError:
+        pass
     return ret
 
 
@@ -901,77 +939,84 @@ class Connections:
         if file.endswith('6') and not os.path.exists(file):
             # IPv6 not supported
             return
-        with open_text(file) as f:
-            f.readline()  # skip the first line
-            for lineno, line in enumerate(f, 1):
-                try:
-                    _, laddr, raddr, status, _, _, _, _, _, inode = \
-                        line.split()[:10]
-                except ValueError:
-                    raise RuntimeError(
-                        "error while parsing %s; malformed line %s %r" % (
-                            file, lineno, line))
-                if inode in inodes:
-                    # # We assume inet sockets are unique, so we error
-                    # # out if there are multiple references to the
-                    # # same inode. We won't do this for UNIX sockets.
-                    # if len(inodes[inode]) > 1 and family != socket.AF_UNIX:
-                    #     raise ValueError("ambiguos inode with multiple "
-                    #                      "PIDs references")
-                    pid, fd = inodes[inode][0]
-                else:
-                    pid, fd = None, -1
-                if filter_pid is not None and filter_pid != pid:
-                    continue
-                else:
-                    if type_ == socket.SOCK_STREAM:
-                        status = TCP_STATUSES[status]
-                    else:
-                        status = _common.CONN_NONE
+        try:
+            with open_text(file) as f:
+                f.readline()  # skip the first line
+                for lineno, line in enumerate(f, 1):
                     try:
-                        laddr = Connections.decode_address(laddr, family)
-                        raddr = Connections.decode_address(raddr, family)
-                    except _Ipv6UnsupportedError:
+                        _, laddr, raddr, status, _, _, _, _, _, inode = \
+                            line.split()[:10]
+                    except ValueError:
+                        raise RuntimeError(
+                            "error while parsing %s; malformed line %s %r" % (
+                                file, lineno, line))
+                    if inode in inodes:
+                        # # We assume inet sockets are unique, so we error
+                        # # out if there are multiple references to the
+                        # # same inode. We won't do this for UNIX sockets.
+                        # if len(inodes[inode]) > 1 and family != socket.AF_UNIX:
+                        #     raise ValueError("ambiguos inode with multiple "
+                        #                      "PIDs references")
+                        pid, fd = inodes[inode][0]
+                    else:
+                        pid, fd = None, -1
+                    if filter_pid is not None and filter_pid != pid:
                         continue
-                    yield (fd, family, type_, laddr, raddr, status, pid)
+                    else:
+                        if type_ == socket.SOCK_STREAM:
+                            status = TCP_STATUSES[status]
+                        else:
+                            status = _common.CONN_NONE
+                        try:
+                            laddr = Connections.decode_address(laddr, family)
+                            raddr = Connections.decode_address(raddr, family)
+                        except _Ipv6UnsupportedError:
+                            continue
+                        yield (fd, family, type_, laddr, raddr, status, pid)
+        except IOError:
+            # not supported
+            return
 
     @staticmethod
     def process_unix(file, family, inodes, filter_pid=None):
         """Parse /proc/net/unix files."""
-        with open_text(file) as f:
-            f.readline()  # skip the first line
-            for line in f:
-                tokens = line.split()
-                try:
-                    _, _, _, _, type_, _, inode = tokens[0:7]
-                except ValueError:
-                    if ' ' not in line:
-                        # see: https://github.com/giampaolo/psutil/issues/766
-                        continue
-                    raise RuntimeError(
-                        "error while parsing %s; malformed line %r" % (
-                            file, line))
-                if inode in inodes:
-                    # With UNIX sockets we can have a single inode
-                    # referencing many file descriptors.
-                    pairs = inodes[inode]
-                else:
-                    pairs = [(None, -1)]
-                for pid, fd in pairs:
-                    if filter_pid is not None and filter_pid != pid:
-                        continue
+        try:
+            with open_text(file) as f:
+                f.readline()  # skip the first line
+                for line in f:
+                    tokens = line.split()
+                    try:
+                        _, _, _, _, type_, _, inode = tokens[0:7]
+                    except ValueError:
+                        if ' ' not in line:
+                            # see: https://github.com/giampaolo/psutil/issues/766
+                            continue
+                        raise RuntimeError(
+                            "error while parsing %s; malformed line %r" % (
+                                file, line))
+                    if inode in inodes:
+                        # With UNIX sockets we can have a single inode
+                        # referencing many file descriptors.
+                        pairs = inodes[inode]
                     else:
-                        if len(tokens) == 8:
-                            path = tokens[-1]
+                        pairs = [(None, -1)]
+                    for pid, fd in pairs:
+                        if filter_pid is not None and filter_pid != pid:
+                            continue
                         else:
-                            path = ""
-                        type_ = _common.socktype_to_enum(int(type_))
-                        # XXX: determining the remote endpoint of a
-                        # UNIX socket on Linux is not possible, see:
-                        # https://serverfault.com/questions/252723/
-                        raddr = ""
-                        status = _common.CONN_NONE
-                        yield (fd, family, type_, path, raddr, status, pid)
+                            if len(tokens) == 8:
+                                path = tokens[-1]
+                            else:
+                                path = ""
+                            type_ = _common.socktype_to_enum(int(type_))
+                            # XXX: determining the remote endpoint of a
+                            # UNIX socket on Linux is not possible, see:
+                            # https://serverfault.com/questions/252723/
+                            raddr = ""
+                            status = _common.CONN_NONE
+                            yield (fd, family, type_, path, raddr, status, pid)
+        except IOError:
+            return #XXX
 
     def retrieve(self, kind, pid=None):
         if kind not in self.tmap:
@@ -1017,8 +1062,11 @@ def net_io_counters():
     """Return network I/O statistics for every network interface
     installed on the system as a dict of raw tuples.
     """
-    with open_text("%s/net/dev" % get_procfs_path()) as f:
-        lines = f.readlines()
+    try:
+        with open_text("%s/net/dev" % get_procfs_path()) as f:
+            lines = f.readlines()
+    except IOError:
+        return {}
     retdict = {}
     for line in lines[2:]:
         colon = line.rfind(':')
@@ -1102,8 +1150,11 @@ def disk_io_counters(perdisk=False):
         # See:
         # https://www.kernel.org/doc/Documentation/iostats.txt
         # https://www.kernel.org/doc/Documentation/ABI/testing/procfs-diskstats
-        with open_text("%s/diskstats" % get_procfs_path()) as f:
-            lines = f.readlines()
+        try:
+            with open_text("%s/diskstats" % get_procfs_path()) as f:
+                lines = f.readlines()
+        except IOError:
+            pass
         for line in lines:
             fields = line.split()
             flen = len(fields)
@@ -1129,17 +1180,20 @@ def disk_io_counters(perdisk=False):
                    reads_merged, writes_merged, busy_time)
 
     def read_sysfs():
-        for block in os.listdir('/sys/block'):
-            for root, _, files in os.walk(os.path.join('/sys/block', block)):
-                if 'stat' not in files:
-                    continue
-                with open_text(os.path.join(root, 'stat')) as f:
-                    fields = f.read().strip().split()
-                name = os.path.basename(root)
-                (reads, reads_merged, rbytes, rtime, writes, writes_merged,
-                    wbytes, wtime, _, busy_time) = map(int, fields[:10])
-                yield (name, reads, writes, rbytes, wbytes, rtime,
-                       wtime, reads_merged, writes_merged, busy_time)
+        try:
+            for block in os.listdir('/sys/block'):
+                for root, _, files in os.walk(os.path.join('/sys/block', block)):
+                    if 'stat' not in files:
+                        continue
+                    with open_text(os.path.join(root, 'stat')) as f:
+                        fields = f.read().strip().split()
+                    name = os.path.basename(root)
+                    (reads, reads_merged, rbytes, rtime, writes, writes_merged,
+                        wbytes, wtime, _, busy_time) = map(int, fields[:10])
+                    yield (name, reads, writes, rbytes, wbytes, rtime,
+                           wtime, reads_merged, writes_merged, busy_time)
+        except IOError:
+            return #XXX
 
     if os.path.exists('%s/diskstats' % get_procfs_path()):
         gen = read_procfs()
@@ -1191,26 +1245,32 @@ class RootFsDeviceFinder:
         self.minor = os.minor(dev)
 
     def ask_proc_partitions(self):
-        with open_text("%s/partitions" % get_procfs_path()) as f:
-            for line in f.readlines()[2:]:
-                fields = line.split()
-                if len(fields) < 4:  # just for extra safety
-                    continue
-                major = int(fields[0]) if fields[0].isdigit() else None
-                minor = int(fields[1]) if fields[1].isdigit() else None
-                name = fields[3]
-                if major == self.major and minor == self.minor:
-                    if name:  # just for extra safety
-                        return "/dev/%s" % name
+        try:
+            with open_text("%s/partitions" % get_procfs_path()) as f:
+                for line in f.readlines()[2:]:
+                    fields = line.split()
+                    if len(fields) < 4:  # just for extra safety
+                        continue
+                    major = int(fields[0]) if fields[0].isdigit() else None
+                    minor = int(fields[1]) if fields[1].isdigit() else None
+                    name = fields[3]
+                    if major == self.major and minor == self.minor:
+                        if name:  # just for extra safety
+                            return "/dev/%s" % name
+        except IOError:
+            pass
 
     def ask_sys_dev_block(self):
         path = "/sys/dev/block/%s:%s/uevent" % (self.major, self.minor)
-        with open_text(path) as f:
-            for line in f:
-                if line.startswith("DEVNAME="):
-                    name = line.strip().rpartition("DEVNAME=")[2]
-                    if name:  # just for extra safety
-                        return "/dev/%s" % name
+        try:
+            with open_text(path) as f:
+                for line in f:
+                    if line.startswith("DEVNAME="):
+                        name = line.strip().rpartition("DEVNAME=")[2]
+                        if name:  # just for extra safety
+                            return "/dev/%s" % name
+        except IOError:
+            pass
 
     def ask_sys_class_block(self):
         needle = "%s:%s" % (self.major, self.minor)
@@ -1220,6 +1280,8 @@ class RootFsDeviceFinder:
                 f = open_text(file)
             except FileNotFoundError:  # race condition
                 continue
+            except IOError:
+                pass
             else:
                 with f:
                     data = f.read().strip()
@@ -1254,16 +1316,19 @@ def disk_partitions(all=False):
     """Return mounted disk partitions as a list of namedtuples."""
     fstypes = set()
     procfs_path = get_procfs_path()
-    with open_text("%s/filesystems" % procfs_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith("nodev"):
-                fstypes.add(line.strip())
-            else:
-                # ignore all lines starting with "nodev" except "nodev zfs"
-                fstype = line.split("\t")[1]
-                if fstype == "zfs":
-                    fstypes.add("zfs")
+    try:
+        with open_text("%s/filesystems" % procfs_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("nodev"):
+                    fstypes.add(line.strip())
+                else:
+                    # ignore all lines starting with "nodev" except "nodev zfs"
+                    fstype = line.split("\t")[1]
+                    if fstype == "zfs":
+                        fstypes.add("zfs")
+    except IOError:
+        pass
 
     # See: https://github.com/giampaolo/psutil/issues/1307
     if procfs_path == "/proc" and os.path.isfile('/etc/mtab'):
@@ -1558,15 +1623,23 @@ def boot_time():
     """Return the system boot time expressed in seconds since the epoch."""
     global BOOT_TIME
     path = '%s/stat' % get_procfs_path()
-    with open_binary(path) as f:
-        for line in f:
-            if line.startswith(b'btime'):
-                ret = float(line.strip().split()[1])
-                BOOT_TIME = ret
-                return ret
-        raise RuntimeError(
-            "line 'btime' not found in %s" % path)
-
+    try:
+        with open_binary(path) as f:
+            for line in f:
+                if line.startswith(b'btime'):
+                    ret = float(line.strip().split()[1])
+                    BOOT_TIME = ret
+                    return ret
+            raise RuntimeError(
+                "line 'btime' not found in %s" % path)
+    except IOError:
+        import subprocess, datetime
+        try:
+            s  = subprocess.getoutput("uptime -s")
+            return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").timestamp()
+        except:
+            raise RuntimeError(
+                "line 'btime' not found in %s" % path)
 
 # =====================================================================
 # --- processes
@@ -1966,7 +2039,7 @@ class Process(object):
                         try:
                             data[fields[0]] = int(fields[1]) * 1024
                         except ValueError:
-                            if fields[0].startswith(b'VmFlags:'):
+                            if fields[0].startswith(b'VmFlags:') or TERMUX:
                                 # see issue #369
                                 continue
                             else:
