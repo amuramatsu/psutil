@@ -56,7 +56,6 @@ from psutil._compat import FileExistsError
 from psutil._compat import FileNotFoundError
 from psutil._compat import range
 from psutil._compat import super
-from psutil._compat import u
 from psutil._compat import unicode
 from psutil._compat import which
 
@@ -87,8 +86,8 @@ __all__ = [
     "HAS_CPU_AFFINITY", "HAS_CPU_FREQ", "HAS_ENVIRON", "HAS_PROC_IO_COUNTERS",
     "HAS_IONICE", "HAS_MEMORY_MAPS", "HAS_PROC_CPU_NUM", "HAS_RLIMIT",
     "HAS_SENSORS_BATTERY", "HAS_BATTERY", "HAS_SENSORS_FANS",
-    "HAS_SENSORS_TEMPERATURES", "MACOS_11PLUS",
-    "MACOS_12PLUS", "COVERAGE",
+    "HAS_SENSORS_TEMPERATURES", "HAS_NET_CONNECTIONS_UNIX", "MACOS_11PLUS",
+    "MACOS_12PLUS", "COVERAGE", 'AARCH64', "QEMU_USER",
     # subprocesses
     'pyrun', 'terminate', 'reap_children', 'spawn_testproc', 'spawn_zombie',
     'spawn_children_pair',
@@ -106,7 +105,7 @@ __all__ = [
     # sync primitives
     'call_until', 'wait_for_pid', 'wait_for_file',
     # network
-    'check_net_address', 'filter_proc_connections',
+    'check_net_address', 'filter_proc_net_connections',
     'get_free_port', 'bind_socket', 'bind_unix_socket', 'tcp_socketpair',
     'unix_socketpair', 'create_sockets',
     # compat
@@ -129,8 +128,15 @@ APPVEYOR = 'APPVEYOR' in os.environ
 GITHUB_ACTIONS = 'GITHUB_ACTIONS' in os.environ or 'CIBUILDWHEEL' in os.environ
 CI_TESTING = APPVEYOR or GITHUB_ACTIONS
 COVERAGE = 'COVERAGE_RUN' in os.environ
+if LINUX and GITHUB_ACTIONS:
+    with open('/proc/1/cmdline') as f:
+        QEMU_USER = "/bin/qemu-" in f.read()
+else:
+    QEMU_USER = False
 # are we a 64 bit process?
 IS_64BIT = sys.maxsize > 2**32
+
+AARCH64 = platform.machine() == "aarch64"
 TERMUX = 'TERMUX_VERSION' in os.environ
 
 
@@ -187,7 +193,7 @@ if os.name == 'java':
     TESTFN_PREFIX = '$psutil-%s-' % os.getpid()
 else:
     TESTFN_PREFIX = '@psutil-%s-' % os.getpid()
-UNICODE_SUFFIX = u("-ƒőő")
+UNICODE_SUFFIX = u"-ƒőő"
 # An invalid unicode string.
 if PY3:
     INVALID_UNICODE_SUFFIX = b"f\xc0\x80".decode('utf8', 'surrogateescape')
@@ -207,13 +213,13 @@ HERE = os.path.realpath(os.path.dirname(__file__))
 
 # --- support
 
-HAS_CONNECTIONS_UNIX = POSIX and not SUNOS
 HAS_CPU_AFFINITY = hasattr(psutil.Process, "cpu_affinity")
 HAS_CPU_FREQ = hasattr(psutil, "cpu_freq")
-HAS_GETLOADAVG = hasattr(psutil, "getloadavg")
 HAS_ENVIRON = hasattr(psutil.Process, "environ")
+HAS_GETLOADAVG = hasattr(psutil, "getloadavg")
 HAS_IONICE = hasattr(psutil.Process, "ionice")
 HAS_MEMORY_MAPS = hasattr(psutil.Process, "memory_maps")
+HAS_NET_CONNECTIONS_UNIX = POSIX and not SUNOS
 HAS_NET_IO_COUNTERS = hasattr(psutil, "net_io_counters")
 HAS_PROC_CPU_NUM = hasattr(psutil.Process, "cpu_num")
 HAS_PROC_IO_COUNTERS = hasattr(psutil.Process, "io_counters")
@@ -410,7 +416,7 @@ def spawn_children_pair():
             s += "f = open('%s', 'w');"
             s += "f.write(str(os.getpid()));"
             s += "f.close();"
-            s += "time.sleep(60);"
+            s += "[time.sleep(0.1) for x in range(100 * 6)];"
             p = subprocess.Popen([r'%s', '-c', s])
             p.wait()
             """ % (os.path.basename(testfn), PYTHON_EXE))
@@ -744,9 +750,9 @@ class retry:
                     self.sleep()
                     continue
             if PY3:
-                raise exc
+                raise exc  # noqa: PLE0704
             else:
-                raise
+                raise  # noqa: PLE0704
 
         # This way the user of the decorated function can change config
         # parameters.
@@ -1407,8 +1413,9 @@ class process_namespace:
     ignored = [
         ('as_dict', (), {}),
         ('children', (), {'recursive': True}),
+        ('connections', (), {}),  # deprecated
         ('is_running', (), {}),
-        ('memory_info_ex', (), {}),
+        ('memory_info_ex', (), {}),  # deprecated
         ('oneshot', (), {}),
         ('parent', (), {}),
         ('parents', (), {}),
@@ -1418,7 +1425,6 @@ class process_namespace:
 
     getters = [
         ('cmdline', (), {}),
-        ('connections', (), {'kind': 'all'}),
         ('cpu_times', (), {}),
         ('create_time', (), {}),
         ('cwd', (), {}),
@@ -1426,6 +1432,7 @@ class process_namespace:
         ('memory_full_info', (), {}),
         ('memory_info', (), {}),
         ('name', (), {}),
+        ('net_connections', (), {'kind': 'all'}),
         ('nice', (), {}),
         ('num_ctx_switches', (), {}),
         ('num_threads', (), {}),
@@ -1559,7 +1566,10 @@ class system_namespace:
         ('virtual_memory', (), {}),
     ]
     if HAS_CPU_FREQ:
-        getters += [('cpu_freq', (), {'percpu': True})]
+        if MACOS and platform.machine() == 'arm64':  # skipped due to #1892
+            pass
+        else:
+            getters += [('cpu_freq', (), {'percpu': True})]
     if HAS_GETLOADAVG:
         getters += [('getloadavg', (), {})]
     if HAS_SENSORS_TEMPERATURES:
@@ -1763,7 +1773,7 @@ def create_sockets():
         if supports_ipv6():
             socks.append(bind_socket(socket.AF_INET6, socket.SOCK_STREAM))
             socks.append(bind_socket(socket.AF_INET6, socket.SOCK_DGRAM))
-        if POSIX and HAS_CONNECTIONS_UNIX:
+        if POSIX and HAS_NET_CONNECTIONS_UNIX:
             fname1 = get_testfn()
             fname2 = get_testfn()
             s1, s2 = unix_socketpair(fname1)
@@ -1888,7 +1898,7 @@ def check_connection_ntuple(conn):
     check_status(conn)
 
 
-def filter_proc_connections(cons):
+def filter_proc_net_connections(cons):
     """Our process may start with some open UNIX sockets which are not
     initialized by us, invalidating unit tests.
     """
@@ -1951,7 +1961,7 @@ def is_namedtuple(x):
     """Check if object is an instance of namedtuple."""
     t = type(x)
     b = t.__bases__
-    if len(b) != 1 or b[0] != tuple:
+    if len(b) != 1 or b[0] is not tuple:
         return False
     f = getattr(t, '_fields', None)
     if not isinstance(f, tuple):

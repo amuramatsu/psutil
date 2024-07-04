@@ -28,7 +28,7 @@ from psutil import LINUX
 from psutil._compat import PY3
 from psutil._compat import FileNotFoundError
 from psutil._compat import basestring
-from psutil._compat import u
+from psutil.tests import AARCH64
 from psutil.tests import GITHUB_ACTIONS
 from psutil.tests import GLOBAL_TIMEOUT
 from psutil.tests import HAS_BATTERY
@@ -36,6 +36,7 @@ from psutil.tests import HAS_CPU_FREQ
 from psutil.tests import HAS_GETLOADAVG
 from psutil.tests import HAS_RLIMIT
 from psutil.tests import PYPY
+from psutil.tests import QEMU_USER
 from psutil.tests import TERMUX
 from psutil.tests import TOLERANCE_DISK_USAGE
 from psutil.tests import TOLERANCE_SYS_MEM
@@ -122,7 +123,7 @@ def get_ipv4_broadcast(ifname):
 def get_ipv6_addresses(ifname):
     with open("/proc/net/if_inet6") as f:
         all_fields = []
-        for line in f.readlines():
+        for line in f:
             fields = line.split()
             if fields[-1] == ifname:
                 all_fields.append(fields)
@@ -279,8 +280,14 @@ class TestSystemVirtualMemoryAgainstFree(PsutilTestCase):
         # This got changed in:
         # https://gitlab.com/procps-ng/procps/commit/
         #     05d751c4f076a2f0118b914c5e51cfbb4762ad8e
+        # Newer versions of procps are using yet another way to compute used
+        # memory.
+        # https://gitlab.com/procps-ng/procps/commit/
+        #     2184e90d2e7cdb582f9a5b706b47015e56707e4d
         if get_free_version_info() < (3, 3, 12):
-            raise self.skipTest("old free version")
+            raise unittest.SkipTest("free version too old")
+        if get_free_version_info() >= (4, 0, 0):
+            raise unittest.SkipTest("free version too recent")
         cli_value = free_physmem().used
         psutil_value = psutil.virtual_memory().used
         self.assertAlmostEqual(
@@ -345,8 +352,14 @@ class TestSystemVirtualMemoryAgainstVmstat(PsutilTestCase):
         # This got changed in:
         # https://gitlab.com/procps-ng/procps/commit/
         #     05d751c4f076a2f0118b914c5e51cfbb4762ad8e
+        # Newer versions of procps are using yet another way to compute used
+        # memory.
+        # https://gitlab.com/procps-ng/procps/commit/
+        #     2184e90d2e7cdb582f9a5b706b47015e56707e4d
         if get_free_version_info() < (3, 3, 12):
-            raise self.skipTest("old free version")
+            raise unittest.SkipTest("free version too old")
+        if get_free_version_info() >= (4, 0, 0):
+            raise unittest.SkipTest("free version too recent")
         vmstat_value = vmstat('used memory') * 1024
         psutil_value = psutil.virtual_memory().used
         self.assertAlmostEqual(
@@ -850,8 +863,8 @@ class TestSystemCPUFrequency(PsutilTestCase):
         ):
             assert psutil.cpu_freq()
 
-    #XXX
-    @unittest.skipIf(TERMUX or not HAS_CPU_FREQ, "not supported")
+    @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
+    @unittest.skipIf(AARCH64, "aarch64 does not report mhz in /proc/cpuinfo")
     def test_emulate_use_cpuinfo(self):
         # Emulate a case where /sys/devices/system/cpu/cpufreq* does not
         # exist and /proc/cpuinfo is used instead.
@@ -1060,7 +1073,9 @@ class TestSystemNetIfAddrs(PsutilTestCase):
     #         pprint.pformat(nics), out))
 
 
-@unittest.skipIf(not LINUX or TERMUX, "LINUX only")
+@unittest.skipIf(TERMUX, "termux not supported")
+@unittest.skipIf(not LINUX, "LINUX only")
+@unittest.skipIf(QEMU_USER, "QEMU user not supported")
 class TestSystemNetIfStats(PsutilTestCase):
     @unittest.skipIf(not which("ifconfig"), "ifconfig utility not available")
     def test_against_ifconfig(self):
@@ -1144,10 +1159,10 @@ class TestSystemNetIOCounters(PsutilTestCase):
             except RuntimeError:
                 continue
             self.assertAlmostEqual(
-                stats.bytes_recv, ifconfig_ret['bytes_recv'], delta=1024 * 5
+                stats.bytes_recv, ifconfig_ret['bytes_recv'], delta=1024 * 10
             )
             self.assertAlmostEqual(
-                stats.bytes_sent, ifconfig_ret['bytes_sent'], delta=1024 * 5
+                stats.bytes_sent, ifconfig_ret['bytes_sent'], delta=1024 * 10
             )
             self.assertAlmostEqual(
                 stats.packets_recv, ifconfig_ret['packets_recv'], delta=1024
@@ -1242,7 +1257,7 @@ class TestSystemDiskPartitions(PsutilTestCase):
                 raise self.fail("couldn't find any ZFS partition")
         else:
             # No ZFS partitions on this system. Let's fake one.
-            fake_file = io.StringIO(u("nodev\tzfs\n"))
+            fake_file = io.StringIO(u"nodev\tzfs\n")
             with mock.patch(
                 'psutil._common.open', return_value=fake_file, create=True
             ) as m1:
@@ -1366,7 +1381,6 @@ class TestSystemDiskIoCounters(PsutilTestCase):
                 ret = psutil.disk_io_counters(perdisk=False, nowrap=False)
                 self.assertIsNone(ret)
 
-        #
         def is_storage_device(name):
             return name == 'nvme0n1'
 
@@ -1386,9 +1400,7 @@ class TestSystemDiskIoCounters(PsutilTestCase):
 
     def test_emulate_use_sysfs(self):
         def exists(path):
-            if path == '/proc/diskstats':
-                return False
-            return True
+            return path == '/proc/diskstats'
 
         wprocfs = psutil.disk_io_counters(perdisk=True)
         with mock.patch(
@@ -1630,7 +1642,7 @@ class TestMisc(PsutilTestCase):
         with ThreadTask():
             p = psutil.Process()
             threads = p.threads()
-            self.assertEqual(len(threads), 2)
+            self.assertEqual(len(threads), 3 if QEMU_USER else 2)
             tid = sorted(threads, key=lambda x: x.id)[1].id
             self.assertNotEqual(p.pid, tid)
             pt = psutil.Process(tid)
@@ -1685,7 +1697,7 @@ class TestSensorsBattery(PsutilTestCase):
             if name.endswith(('AC0/online', 'AC/online')):
                 raise IOError(errno.ENOENT, "")
             elif name.endswith("/status"):
-                return io.StringIO(u("charging"))
+                return io.StringIO(u"charging")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -1716,7 +1728,7 @@ class TestSensorsBattery(PsutilTestCase):
             if name.endswith(('AC0/online', 'AC/online')):
                 raise IOError(errno.ENOENT, "")
             elif name.endswith("/status"):
-                return io.StringIO(u("discharging"))
+                return io.StringIO(u"discharging")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -1790,11 +1802,11 @@ class TestSensorsBatteryEmulated(PsutilTestCase):
     def test_it(self):
         def open_mock(name, *args, **kwargs):
             if name.endswith("/energy_now"):
-                return io.StringIO(u("60000000"))
+                return io.StringIO(u"60000000")
             elif name.endswith("/power_now"):
-                return io.StringIO(u("0"))
+                return io.StringIO(u"0")
             elif name.endswith("/energy_full"):
-                return io.StringIO(u("60000001"))
+                return io.StringIO(u"60000001")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -1812,9 +1824,9 @@ class TestSensorsTemperatures(PsutilTestCase):
     def test_emulate_class_hwmon(self):
         def open_mock(name, *args, **kwargs):
             if name.endswith('/name'):
-                return io.StringIO(u("name"))
+                return io.StringIO(u"name")
             elif name.endswith('/temp1_label'):
-                return io.StringIO(u("label"))
+                return io.StringIO(u"label")
             elif name.endswith('/temp1_input'):
                 return io.BytesIO(b"30000")
             elif name.endswith('/temp1_max'):
@@ -1844,9 +1856,9 @@ class TestSensorsTemperatures(PsutilTestCase):
             elif name.endswith('temp'):
                 return io.BytesIO(b"30000")
             elif name.endswith('0_type'):
-                return io.StringIO(u("critical"))
+                return io.StringIO(u"critical")
             elif name.endswith('type'):
-                return io.StringIO(u("name"))
+                return io.StringIO(u"name")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -1880,11 +1892,11 @@ class TestSensorsFans(PsutilTestCase):
     def test_emulate_data(self):
         def open_mock(name, *args, **kwargs):
             if name.endswith('/name'):
-                return io.StringIO(u("name"))
+                return io.StringIO(u"name")
             elif name.endswith('/fan1_label'):
-                return io.StringIO(u("label"))
+                return io.StringIO(u"label")
             elif name.endswith('/fan1_input'):
-                return io.StringIO(u("2000"))
+                return io.StringIO(u"2000")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -1966,7 +1978,6 @@ class TestProcess(PsutilTestCase):
                         break
             raise RuntimeError("timeout looking for test file")
 
-        #
         testfn = self.get_testfn()
         with open(testfn, "w"):
             self.assertEqual(get_test_file(testfn).mode, "w")
@@ -1974,7 +1985,6 @@ class TestProcess(PsutilTestCase):
             self.assertEqual(get_test_file(testfn).mode, "r")
         with open(testfn, "a"):
             self.assertEqual(get_test_file(testfn).mode, "a")
-        #
         with open(testfn, "r+"):
             self.assertEqual(get_test_file(testfn).mode, "r+")
         with open(testfn, "w+"):
@@ -2066,13 +2076,13 @@ class TestProcess(PsutilTestCase):
     def test_cmdline_mocked(self):
         # see: https://github.com/giampaolo/psutil/issues/639
         p = psutil.Process()
-        fake_file = io.StringIO(u('foo\x00bar\x00'))
+        fake_file = io.StringIO(u'foo\x00bar\x00')
         with mock.patch(
             'psutil._common.open', return_value=fake_file, create=True
         ) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar'])
             assert m.called
-        fake_file = io.StringIO(u('foo\x00bar\x00\x00'))
+        fake_file = io.StringIO(u'foo\x00bar\x00\x00')
         with mock.patch(
             'psutil._common.open', return_value=fake_file, create=True
         ) as m:
@@ -2082,13 +2092,13 @@ class TestProcess(PsutilTestCase):
     def test_cmdline_spaces_mocked(self):
         # see: https://github.com/giampaolo/psutil/issues/1179
         p = psutil.Process()
-        fake_file = io.StringIO(u('foo bar '))
+        fake_file = io.StringIO(u'foo bar ')
         with mock.patch(
             'psutil._common.open', return_value=fake_file, create=True
         ) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar'])
             assert m.called
-        fake_file = io.StringIO(u('foo bar  '))
+        fake_file = io.StringIO(u'foo bar  ')
         with mock.patch(
             'psutil._common.open', return_value=fake_file, create=True
         ) as m:
@@ -2099,7 +2109,7 @@ class TestProcess(PsutilTestCase):
         # https://github.com/giampaolo/psutil/issues/
         #    1179#issuecomment-552984549
         p = psutil.Process()
-        fake_file = io.StringIO(u('foo\x20bar\x00'))
+        fake_file = io.StringIO(u'foo\x20bar\x00')
         with mock.patch(
             'psutil._common.open', return_value=fake_file, create=True
         ) as m:
@@ -2267,7 +2277,7 @@ class TestProcess(PsutilTestCase):
             self.assertEqual(gids.saved, 1006)
             self.assertEqual(p._proc._get_eligible_cpus(), list(range(8)))
 
-    def test_connections_enametoolong(self):
+    def test_net_connections_enametoolong(self):
         # Simulate a case where /proc/{pid}/fd/{fd} symlink points to
         # a file with full path longer than PATH_MAX, see:
         # https://github.com/giampaolo/psutil/issues/1940
@@ -2277,7 +2287,7 @@ class TestProcess(PsutilTestCase):
         ) as m:
             p = psutil.Process()
             with mock.patch("psutil._pslinux.debug"):
-                self.assertEqual(p.connections(), [])
+                self.assertEqual(p.net_connections(), [])
                 assert m.called
 
 
@@ -2312,6 +2322,7 @@ class TestProcessAgainstStatus(PsutilTestCase):
         value = self.read_status_file("Name:")
         self.assertEqual(self.proc.name(), value)
 
+    @unittest.skipIf(QEMU_USER, "QEMU user not supported")
     def test_status(self):
         value = self.read_status_file("State:")
         value = value[value.find('(') + 1 : value.rfind(')')]

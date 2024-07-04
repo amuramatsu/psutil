@@ -1,5 +1,57 @@
 *Bug tracker at https://github.com/giampaolo/psutil/issues*
 
+6.0.0 2024-06-18
+================
+
+**Enhancements**
+
+- 2109_: ``maxfile`` and ``maxpath`` fields were removed from the namedtuple
+  returned by `disk_partitions()`_. Reason: on network filesystems (NFS) this
+  can potentially take a very long time to complete.
+- 2366_, [Windows]: log debug message when using slower process APIs.
+- 2375_, [macOS]: provide arm64 wheels.  (patch by Matthieu Darbois)
+- 2396_: `process_iter()`_ no longer pre-emptively checks whether PIDs have
+  been reused. This makes `process_iter()`_ around 20x times faster.
+- 2396_: a new ``psutil.process_iter.cache_clear()`` API can be used the clear
+  `process_iter()`_ internal cache.
+- 2401_, Support building with free-threaded CPython 3.13.
+- 2407_: `Process.connections()`_ was renamed to `Process.net_connections()`_.
+  The old name is still available, but it's deprecated (triggers a
+  ``DeprecationWarning``) and will be removed in the future.
+- 2425_: [Linux]: provide aarch64 wheels.  (patch by Matthieu Darbois / Ben Raz)
+
+**Bug fixes**
+
+- 2250_, [NetBSD]: `Process.cmdline()`_ sometimes fail with EBUSY. It usually
+  happens for long cmdlines with lots of arguments. In this case retry getting
+  the cmdline for up to 50 times, and return an empty list as last resort.
+- 2254_, [Linux]: offline cpus raise NotImplementedError in cpu_freq() (patch
+  by Shade Gladden)
+- 2272_: Add pickle support to psutil Exceptions.
+- 2359_, [Windows], [CRITICAL]: `pid_exists()`_ disagrees with `Process`_ on
+  whether a pid exists when ERROR_ACCESS_DENIED.
+- 2360_, [macOS]: can't compile on macOS < 10.13.  (patch by Ryan Schmidt)
+- 2362_, [macOS]: can't compile on macOS 10.11.  (patch by Ryan Schmidt)
+- 2365_, [macOS]: can't compile on macOS < 10.9.  (patch by Ryan Schmidt)
+- 2395_, [OpenBSD]: `pid_exists()`_ erroneously return True if the argument is
+  a thread ID (TID) instead of a PID (process ID).
+- 2412_, [macOS]: can't compile on macOS 10.4 PowerPC due to missing `MNT_`
+  constants.
+
+**Porting notes**
+
+Version 6.0.0 introduces some changes which affect backward compatibility:
+
+- 2109_: the namedtuple returned by `disk_partitions()`_' no longer has
+  ``maxfile`` and ``maxpath`` fields.
+- 2396_: `process_iter()`_ no longer pre-emptively checks whether PIDs have
+  been reused. If you want to check for PID reusage you are supposed to use
+  `Process.is_running()`_ against the yielded `Process`_ instances. That will
+  also automatically remove reused PIDs from `process_iter()`_ internal cache.
+- 2407_: `Process.connections()`_ was renamed to `Process.net_connections()`_.
+  The old name is still available, but it's deprecated (triggers a
+  ``DeprecationWarning``) and will be removed in the future.
+
 5.9.8
 =====
 
@@ -2606,6 +2658,7 @@ In most cases accessing the old names will work but it will cause a
 .. _`Process.memory_maps()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.memory_maps
 .. _`Process.memory_percent()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.memory_percent
 .. _`Process.name()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.name
+.. _`Process.net_connections()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.net_connections
 .. _`Process.nice()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.nice
 .. _`Process.num_ctx_switches()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.num_ctx_switches
 .. _`Process.num_fds()`: https://psutil.readthedocs.io/en/latest/#psutil.Process.num_fds

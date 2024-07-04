@@ -48,6 +48,7 @@ from psutil.tests import HAS_SENSORS_TEMPERATURES
 from psutil.tests import IS_64BIT
 from psutil.tests import MACOS_12PLUS
 from psutil.tests import PYPY
+from psutil.tests import QEMU_USER
 from psutil.tests import TERMUX
 from psutil.tests import UNICODE_SUFFIX
 from psutil.tests import PsutilTestCase
@@ -62,8 +63,8 @@ from psutil.tests import retry_on_failure
 # ===================================================================
 
 
-class TestProcessAPIs(PsutilTestCase):
-    def test_process_iter(self):
+class TestProcessIter(PsutilTestCase):
+    def test_pid_presence(self):
         self.assertIn(os.getpid(), [x.pid for x in psutil.process_iter()])
         sproc = self.spawn_testproc()
         self.assertIn(sproc.pid, [x.pid for x in psutil.process_iter()])
@@ -72,24 +73,40 @@ class TestProcessAPIs(PsutilTestCase):
         p.wait()
         self.assertNotIn(sproc.pid, [x.pid for x in psutil.process_iter()])
 
-        # assert there are no duplicates
+    def test_no_duplicates(self):
         ls = [x for x in psutil.process_iter()]
         self.assertEqual(
             sorted(ls, key=lambda x: x.pid),
             sorted(set(ls), key=lambda x: x.pid),
         )
 
-        with mock.patch(
-            'psutil.Process', side_effect=psutil.NoSuchProcess(os.getpid())
-        ):
-            self.assertEqual(list(psutil.process_iter()), [])
-        with mock.patch(
-            'psutil.Process', side_effect=psutil.AccessDenied(os.getpid())
-        ):
-            with self.assertRaises(psutil.AccessDenied):
-                list(psutil.process_iter())
+    def test_emulate_nsp(self):
+        list(psutil.process_iter())  # populate cache
+        for x in range(2):
+            with mock.patch(
+                'psutil.Process.as_dict',
+                side_effect=psutil.NoSuchProcess(os.getpid()),
+            ):
+                self.assertEqual(
+                    list(psutil.process_iter(attrs=["cpu_times"])), []
+                )
+            psutil.process_iter.cache_clear()  # repeat test without cache
 
-    def test_prcess_iter_w_attrs(self):
+    def test_emulate_access_denied(self):
+        list(psutil.process_iter())  # populate cache
+        for x in range(2):
+            with mock.patch(
+                'psutil.Process.as_dict',
+                side_effect=psutil.AccessDenied(os.getpid()),
+            ):
+                with self.assertRaises(psutil.AccessDenied):
+                    list(psutil.process_iter(attrs=["cpu_times"]))
+            psutil.process_iter.cache_clear()  # repeat test without cache
+
+    def test_attrs(self):
+        for p in psutil.process_iter(attrs=['pid']):
+            self.assertEqual(list(p.info.keys()), ['pid'])
+        # yield again
         for p in psutil.process_iter(attrs=['pid']):
             self.assertEqual(list(p.info.keys()), ['pid'])
         with self.assertRaises(ValueError):
@@ -114,6 +131,14 @@ class TestProcessAPIs(PsutilTestCase):
                 self.assertGreaterEqual(p.info['pid'], 0)
             assert m.called
 
+    def test_cache_clear(self):
+        list(psutil.process_iter())  # populate cache
+        assert psutil._pmap
+        psutil.process_iter.cache_clear()
+        assert not psutil._pmap
+
+
+class TestProcessAPIs(PsutilTestCase):
     @unittest.skipIf(
         PYPY and WINDOWS, "spawn_testproc() unreliable on PYPY + WINDOWS"
     )
@@ -345,7 +370,7 @@ class TestCpuAPIs(PsutilTestCase):
         self.assertIsNotNone(logical)
         self.assertEqual(logical, len(psutil.cpu_times(percpu=True)))
         self.assertGreaterEqual(logical, 1)
-        #
+
         if os.path.exists("/proc/cpuinfo"):
             with open("/proc/cpuinfo") as fd:
                 cpuinfo_data = fd.read()
@@ -356,7 +381,7 @@ class TestCpuAPIs(PsutilTestCase):
         logical = psutil.cpu_count()
         cores = psutil.cpu_count(logical=False)
         if cores is None:
-            raise self.skipTest("cpu_count_cores() is None")
+            raise unittest.SkipTest("cpu_count_cores() is None")
         if WINDOWS and sys.getwindowsversion()[:2] <= (6, 1):  # <= Vista
             self.assertIsNone(cores)
         else:
@@ -386,7 +411,7 @@ class TestCpuAPIs(PsutilTestCase):
             self.assertIsInstance(cp_time, float)
             self.assertGreaterEqual(cp_time, 0.0)
             total += cp_time
-        self.assertAlmostEqual(total, sum(times))
+        self.assertAlmostEqual(total, sum(times), places=6)
         str(times)
         # CPU times are always supposed to increase over time
         # or at least remain the same and that's because time
@@ -426,7 +451,7 @@ class TestCpuAPIs(PsutilTestCase):
                 self.assertIsInstance(cp_time, float)
                 self.assertGreaterEqual(cp_time, 0.0)
                 total += cp_time
-            self.assertAlmostEqual(total, sum(times))
+            self.assertAlmostEqual(total, sum(times), places=6)
             str(times)
         self.assertEqual(
             len(psutil.cpu_times(percpu=True)[0]),
@@ -582,7 +607,7 @@ class TestCpuAPIs(PsutilTestCase):
 
         ls = psutil.cpu_freq(percpu=True)
         if FREEBSD and not ls:
-            raise self.skipTest("returns empty list on FreeBSD")
+            raise unittest.SkipTest("returns empty list on FreeBSD")
 
         assert ls, ls
         check_ls([psutil.cpu_freq(percpu=False)])
@@ -647,12 +672,6 @@ class TestDiskAPIs(PsutilTestCase):
             self.assertIsInstance(nt.mountpoint, str)
             self.assertIsInstance(nt.fstype, str)
             self.assertIsInstance(nt.opts, str)
-            self.assertIsInstance(nt.maxfile, (int, type(None)))
-            self.assertIsInstance(nt.maxpath, (int, type(None)))
-            if nt.maxfile is not None and not GITHUB_ACTIONS:
-                self.assertGreater(nt.maxfile, 0)
-            if nt.maxpath is not None:
-                self.assertGreater(nt.maxpath, 0)
 
         # all = False
         ls = psutil.disk_partitions(all=False)
@@ -796,7 +815,8 @@ class TestNetAPIs(PsutilTestCase):
             self.assertEqual(psutil.net_io_counters(pernic=True), {})
             assert m.called
 
-    @unittest.skipIf(TERMUX, 'not supported')
+    @unittest.skipIf(TERMUX, 'termux not supported')
+    @unittest.skipIf(QEMU_USER, 'QEMU user not supported')
     def test_net_if_addrs(self):
         nics = psutil.net_if_addrs()
         assert nics, nics
@@ -836,7 +856,7 @@ class TestNetAPIs(PsutilTestCase):
                             0,
                             socket.AI_PASSIVE,
                         )[0]
-                        af, socktype, proto, canonname, sa = info
+                        af, socktype, proto, _canonname, sa = info
                         s = socket.socket(af, socktype, proto)
                         with contextlib.closing(s):
                             s.bind(sa)
@@ -884,7 +904,8 @@ class TestNetAPIs(PsutilTestCase):
             else:
                 self.assertEqual(addr.address, '06-3d-29-00-00-00')
 
-    @unittest.skipIf(TERMUX, 'not supported')
+    @unittest.skipIf(TERMUX, 'termux not supported')
+    @unittest.skipIf(QEMU_USER, 'QEMU user not supported')
     def test_net_if_stats(self):
         nics = psutil.net_if_stats()
         assert nics, nics
